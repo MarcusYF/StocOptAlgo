@@ -1,0 +1,128 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Aug 15 11:24:12 2016
+
+@author: yaofan29597
+"""
+import numpy as np
+import operator
+
+# directory
+working_dir = '/root/jupyter/FanYao/'
+
+def file2matrix(filename, n_feature):
+    fr = open(filename)
+    numberOfLines = len(fr.readlines())         #get the number of lines in the file
+    returnMat = np.zeros((numberOfLines, n_feature))        #prepare matrix to return
+    classLabelVector_ = []                       #prepare labels return   
+    fr = open(filename)
+    index = 0
+    for line in fr.readlines():
+        line = line.strip()
+        listFromLine = line.split(' ')
+        # get label
+        classLabelVector_.append(int(listFromLine[0]))
+        # get features
+        for pair in listFromLine[1:]:
+            poi = pair.split(':')
+            returnMat[index][int(poi[0])-1] = poi[1]
+        index += 1
+    
+    label_unique = set(classLabelVector_)
+    
+    if len(label_unique) <= 2:
+        label_map = {min(label_unique):0, max(label_unique):1}
+        classLabelVector = list(map(lambda x: label_map.get(x), classLabelVector_))
+        positive_ratio = sum(classLabelVector) / numberOfLines
+    else:
+        label_map = dict(zip(label_unique, range(0, len(label_unique))))
+        classLabelVector = list(map(lambda x: label_map.get(x), classLabelVector_))
+        positive_ratio = 0
+        
+    return returnMat, classLabelVector, numberOfLines, positive_ratio
+    
+
+
+    
+def SM_AdaGr(data, class_num, epoch, thres):
+    dim = data.shape[1]
+    data = np.tile(data, (epoch, 1))
+    np.random.shuffle(data)
+    T = data.shape[0]
+    X = data[:, 0:dim-1]
+    Y = data[:, dim-1]
+    beta = np.zeros((class_num, dim-1))
+    r = np.zeros(T-1,)
+    r_smo = np.zeros(T-1,)
+    l = np.zeros(T-1,)
+    l_ = np.zeros(T-1,)
+    l_smo = np.zeros(T-1,)
+    l_smo_ = np.zeros(T-1,) 
+    l_m1 = np.zeros(T-1,) 
+    l_m2 = np.zeros(T-1,) 
+    pml = np.zeros(T-1,) 
+    
+    for i in range(0, T+1):
+        if i% 200 == 0:
+            print('optimizing...\t|{0:%}'.format(float(i)/T))
+            tag = beta.dot(X.T).A.argmax(0)
+            tag = tag.reshape(Y.shape)
+            acc = float(sum(abs(tag-Y) < .5)) / len(Y)
+            print('accuracy:               \t|{0:%}'.format(acc))
+        
+
+        x = X[i, :]
+        y = int(Y[i])
+        
+        # 计算s_i
+        tmp = beta.dot(x.T)
+        #print(max(tmp))
+        e_tmp = np.exp(tmp)
+        
+        # 计算p_i
+        Se_tmp= sum(e_tmp)
+        prob = e_tmp / Se_tmp
+        
+        # 计算梯度
+        grad = np.matrix(prob) * x
+        grad[y] -= x
+        
+        # 计算步长
+        b = np.exp(prob).A        
+
+        # 近似公式
+
+        r[i] = -(e_tmp[y] - thres * Se_tmp) / ((thres * ((e_tmp.T * b) - Se_tmp)) - e_tmp[y] * (1 - np.exp(1) / b[y])) / (x.dot(x.T))      
+#        r_smo[i] =0.01;
+        
+        
+        lbd = float(1)/(i+1)
+        if i == 0:
+            r_smo[i] = r[i]
+        else:
+            r_smo[i] = lbd * r[i] + (1 - lbd) * r_smo[i-1]
+                
+        # 更新 beta
+        delta = r_smo[i] * grad
+        beta -= delta
+        
+        # 计算 loss
+        l_[i] = - tmp[y] + np.log(Se_tmp)
+        rho = lbd
+        if i == 0:
+            l_smo_[i] = l_[i]
+        else:
+            l_smo_[i] = (1 - rho) * l_smo_[i-1] + rho * l_[i]
+
+    return l_, l_smo_, tag, Y
+
+
+if __name__ == '__main__':
+    
+    filename = 'aloi.scale.txt'
+    
+    returnMat, classLabelVector, numberOfLines, positive_ratio = file2matrix(working_dir + filename, 128)
+            
+    data = np.hstack((returnMat, np.matrix(classLabelVector).T))
+
+    l, l_smo, tag, ground_truth = SM_AdaGr(data, 1000, 2, 0.95)
