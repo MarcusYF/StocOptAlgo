@@ -4,125 +4,327 @@ Created on Mon Aug 15 11:24:12 2016
 
 @author: yaofan29597
 """
+
 import numpy as np
-import operator
+from sklearn.cross_validation import train_test_split
 
-# directory
-working_dir = '/root/jupyter/FanYao/'
-
-def file2matrix(filename, n_feature):
-    fr = open(filename)
-    numberOfLines = len(fr.readlines())         #get the number of lines in the file
-    returnMat = np.zeros((numberOfLines, n_feature))        #prepare matrix to return
-    classLabelVector_ = []                       #prepare labels return   
-    fr = open(filename)
-    index = 0
-    for line in fr.readlines():
-        line = line.strip()
-        listFromLine = line.split(' ')
-        # get label
-        classLabelVector_.append(int(listFromLine[0]))
-        # get features
-        for pair in listFromLine[1:]:
-            poi = pair.split(':')
-            returnMat[index][int(poi[0])-1] = poi[1]
-        index += 1
+class StocOptAlgo:
+    def __init__(self):
+        self.isprint_info = True
     
-    label_unique = set(classLabelVector_)
-    
-    if len(label_unique) <= 2:
-        label_map = {min(label_unique):0, max(label_unique):1}
-        classLabelVector = list(map(lambda x: label_map.get(x), classLabelVector_))
-        positive_ratio = sum(classLabelVector) / numberOfLines
-    else:
-        label_map = dict(zip(label_unique, range(0, len(label_unique))))
-        classLabelVector = list(map(lambda x: label_map.get(x), classLabelVector_))
-        positive_ratio = 0
+    def load_data(self, data, class_num, test_size, epoch, milestone):
+        self.dim = data.shape[1]
+        self.X = data[:, 0:self.dim-1]
+        self.Y = list(map(lambda x:int(x), data[:, self.dim-1]))
         
-    return returnMat, classLabelVector, numberOfLines, positive_ratio
+        
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(self.X, np.array(self.Y), test_size=test_size, random_state=7)    
     
-
-
+        # 不做交叉验证
+        if test_size == 0:
+            self.X_test = self.X_train
+            self.y_test = self.y_train
     
-def SM_AdaGr(data, class_num, epoch, thres):
-    dim = data.shape[1]
-    data = np.tile(data, (epoch, 1))
-    np.random.shuffle(data)
-    T = data.shape[0]
-    X = data[:, 0:dim-1]
-    Y = data[:, dim-1]
-    beta = np.zeros((class_num, dim-1))
-    r = np.zeros(T-1,)
-    r_smo = np.zeros(T-1,)
-    l = np.zeros(T-1,)
-    l_ = np.zeros(T-1,)
-    l_smo = np.zeros(T-1,)
-    l_smo_ = np.zeros(T-1,) 
-    l_m1 = np.zeros(T-1,) 
-    l_m2 = np.zeros(T-1,) 
-    pml = np.zeros(T-1,) 
+        self.T = self.X_train.shape[0]
+        
+        
+        self.List = np.tile(range(0, self.T), (1, epoch))[0]
+        np.random.shuffle(self.List)
+        
+        self.T *= epoch
+        self.class_num = class_num
+        self.milestone = milestone
     
-    for i in range(0, T+1):
-        if i% 200 == 0:
+    def reset_parameters(self):
+        
+        # public parameters
+        self.beta = np.zeros((1, self.dim-1))
+        self.l_ = np.zeros(self.T,)
+        self.l_smo_ = np.zeros(self.T,) 
+        self.loss = np.zeros(self.T,)
+        self.prec = np.zeros(self.T,)
+        
+        # for AdaGr
+        self.r = np.zeros(self.T,)
+        self.r_smo = np.zeros(self.T,) 
+        
+        # for FTRL
+        self.z = np.zeros((self.dim-1, ))
+        self.s = np.zeros((self.dim-1, ))
+        self.sum_g = np.zeros((self.dim-1, ))
+        
+        # for SVRG
+        self.beta_s = np.zeros((1, self.dim-1))
+        
+        
+    
+    def print_info(self, T, i, beta, X_test, y_test):
+        if (i+1)% int(T/self.milestone) == 0:
             print('optimizing...\t|{0:%}'.format(float(i)/T))
-            tag = beta.dot(X.T).A.argmax(0)
-            tag = tag.reshape(Y.shape)
-            acc = float(sum(abs(tag-Y) < .5)) / len(Y)
-            print('accuracy:               \t|{0:%}'.format(acc))
-        
-
-        x = X[i, :]
-        y = int(Y[i])
-        
-        # 计算s_i
-        tmp = beta.dot(x.T)
-        #print(max(tmp))
-        e_tmp = np.exp(tmp)
-        
-        # 计算p_i
-        Se_tmp= sum(e_tmp)
-        prob = e_tmp / Se_tmp
-        
-        # 计算梯度
-        grad = np.matrix(prob) * x
-        grad[y] -= x
-        
-        # 计算步长
-        b = np.exp(prob).A        
-
-        # 近似公式
-
-        r[i] = -(e_tmp[y] - thres * Se_tmp) / ((thres * ((e_tmp.T * b) - Se_tmp)) - e_tmp[y] * (1 - np.exp(1) / b[y])) / (x.dot(x.T))      
-#        r_smo[i] =0.01;
-        
-        
-        lbd = float(1)/(i+1)
-        if i == 0:
-            r_smo[i] = r[i]
-        else:
-            r_smo[i] = lbd * r[i] + (1 - lbd) * r_smo[i-1]
-                
-        # 更新 beta
-        delta = r_smo[i] * grad
-        beta -= delta
-        
-        # 计算 loss
-        l_[i] = - tmp[y] + np.log(Se_tmp)
-        rho = lbd
-        if i == 0:
-            l_smo_[i] = l_[i]
-        else:
-            l_smo_[i] = (1 - rho) * l_smo_[i-1] + rho * l_[i]
-
-    return l_, l_smo_, tag, Y
-
-
-if __name__ == '__main__':
-    
-    filename = 'aloi.scale.txt'
-    
-    returnMat, classLabelVector, numberOfLines, positive_ratio = file2matrix(working_dir + filename, 128)
             
-    data = np.hstack((returnMat, np.matrix(classLabelVector).T))
+            if self.beta.shape[0] < 2:
+                l_tmp = beta.dot(X_test.T).A[0]
+                l_prob = 1 / (1 + np.exp(-l_tmp))
+                l =  (l_tmp * (1-y_test) - np.log(l_prob)).mean()
+                tag = list(l_tmp > 0)
+            else:
+                l_tmp = beta.dot(X_test.T).A
+                exp_tmp = np.exp(l_tmp)
+                l_prob = exp_tmp / exp_tmp.sum(0)
+                l = -np.log(l_prob[list(y_test), range(0,len(y_test))]).mean()
+                tag = list(l_tmp.argmax(0))
+            
+            acc = float(sum(abs(np.array(tag)-y_test) < .5)) / len(y_test)
+            print('accuracy:               \t|{0:%}'.format(acc))
+            print('loss:                   \t|{0}'.format(l))
+            ind = int(float(i+1)/int(T/self.milestone))
+            self.prec[ind] = acc
+            self.loss[ind] = l  
 
-    l, l_smo, tag, ground_truth = SM_AdaGr(data, 1000, 2, 0.95)
+        
+
+    def LR_SGD(self, r):
+        
+        self.reset_parameters()
+        for i in range(0, self.T):
+            
+            if self.isprint_info == True:
+                self.print_info(self.T, i, self.beta, self.X_test, self.y_test)
+                
+               
+        
+            x = self.X_train[self.List[i], :]
+            y = self.y_train[self.List[i]]
+    
+            # 计算 p_i
+            tmp = self.beta.dot(x.T).A[0][0]
+            prob = 1 / (1 + np.exp(-tmp))
+            
+            # 计算梯度
+            grad = x.A * (prob - y)
+           
+            # 更新 beta
+            delta = r * grad
+            self.beta -= delta
+            
+            # 计算 loss
+            self.l_[i] = tmp * (1-y) - np.log(prob)
+    #        tmp1 = beta[:,:,i+1].dot(x.T)
+    #        l[i] = - tmp1[y] + np.log(sum(np.exp(tmp1)))
+            rho = float(1)/(i+1)
+            if i == 0:
+    #            l_smo[i] = l[i]
+                self.l_smo_[i] = self.l_[i]
+    #            l_m1[i] = l[i]
+    #            l_m2[i] = l[i]
+            else:
+    #            l_smo[i] = (1 - rho) * l_smo[i-1] + rho * l[i]
+                self.l_smo_[i] = (1 - rho) * self.l_smo_[i-1] + rho * self.l_[i]
+    #            l_m1[i] = l_m1[i-1] + (i+1) * l_smo[i]
+    #            l_m2[i] = l_m2[i-1] + (i+1)**2 * l_smo[i]
+    #            pml[i] = 2/i/(i+1)*(6/(i+2)*l_m2[i]-3*l_m1[i])
+        
+        
+    #    return r, r_smo, l, l_, l_smo, l_smo_, pml, tag
+        return self.l_, self.l_smo_, self.prec, self.loss
+        
+        
+    def LR_SVRG(self, r, stage_num, step_num):
+        
+        self.reset_parameters()
+        for s in range(0, stage_num):
+            
+            
+        
+            x = self.X_train[self.List[i], :]
+            y = self.y_train[self.List[i]]
+    
+            # 计算 p_i
+            tmp = self.beta_s.dot(x.T).A[0][0]
+            prob = 1 / (1 + np.exp(-tmp))
+            
+            # 计算梯度
+            grad = x.A * (prob - y)
+           
+            # 更新 beta
+            delta = r * grad
+            self.beta -= delta
+            
+            # 计算 loss
+            self.l_[i] = tmp * (1-y) - np.log(prob)
+    #        tmp1 = beta[:,:,i+1].dot(x.T)
+    #        l[i] = - tmp1[y] + np.log(sum(np.exp(tmp1)))
+            rho = float(1)/(i+1)
+            if i == 0:
+    #            l_smo[i] = l[i]
+                self.l_smo_[i] = self.l_[i]
+    #            l_m1[i] = l[i]
+    #            l_m2[i] = l[i]
+            else:
+    #            l_smo[i] = (1 - rho) * l_smo[i-1] + rho * l[i]
+                self.l_smo_[i] = (1 - rho) * self.l_smo_[i-1] + rho * self.l_[i]
+    #            l_m1[i] = l_m1[i-1] + (i+1) * l_smo[i]
+    #            l_m2[i] = l_m2[i-1] + (i+1)**2 * l_smo[i]
+    #            pml[i] = 2/i/(i+1)*(6/(i+2)*l_m2[i]-3*l_m1[i])
+        
+        
+    #    return r, r_smo, l, l_, l_smo, l_smo_, pml, tag
+        return self.l_, self.l_smo_, self.prec, self.loss
+
+    def LR_FTRL(self, r, eps, l1, l2):
+        
+        self.reset_parameters()
+        for i in range(0, self.T):
+            
+            if self.isprint_info == True:
+                self.print_info(self.T, i, self.beta, self.X_test, self.y_test)
+        
+            x = self.X_train[self.List[i], :]
+            y = self.y_train[self.List[i]]        
+    
+            # 计算 sqrt(sum_t(g.^2))
+            sqrt_s = np.sqrt(self.s)
+        
+            for j in range(0, self.dim-1):
+                if abs(self.z[j]) < l1:
+                    self.beta[0][j] = 0
+                else:
+                    self.beta[0][j] = -1 / ((eps + sqrt_s[j]) / r + l2) * (self.z[j] - np.sign(self.z[j]) * l1)
+        
+            # 计算 p_i
+            tmp = self.beta.dot(x.T).A[0][0]
+            prob = 1 / (1 + np.exp(-tmp))
+        
+            # 计算梯度
+            grad = x.A * (prob - y)
+        
+            # accumulate g
+            self.sum_g += grad[0]
+        
+            # accumulate g square
+            self.s += grad[0]**2
+        
+            # 计算 sigma
+            sigma = 1 / r * (np.sqrt(self.s) - sqrt_s)
+        
+            # collect historical info in z
+            self.z = self.sum_g  - sigma * self.beta
+            self.z = self.z[0]
+            
+            # 计算 loss
+            self.l_[i] = tmp * (1-y) - np.log(prob)
+    #        tmp1 = beta[:,:,i+1].dot(x.T)
+    #        l[i] = - tmp1[y] + np.log(sum(np.exp(tmp1)))
+            rho = float(1)/(i+1)
+            if i == 0:
+    #            l_smo[i] = l[i]
+                self.l_smo_[i] = self.l_[i]
+    #            l_m1[i] = l[i]
+    #            l_m2[i] = l[i]
+            else:
+    #            l_smo[i] = (1 - rho) * l_smo[i-1] + rho * l[i]
+                self.l_smo_[i] = (1 - rho) * self.l_smo_[i-1] + rho * self.l_[i]
+    #            l_m1[i] = l_m1[i-1] + (i+1) * l_smo[i]
+    #            l_m2[i] = l_m2[i-1] + (i+1)**2 * l_smo[i]
+    #            pml[i] = 2/i/(i+1)*(6/(i+2)*l_m2[i]-3*l_m1[i])
+        
+        
+    #    return r, r_smo, l, l_, l_smo, l_smo_, pml, tag
+        return self.l_, self.l_smo_, self.prec, self.loss
+    
+    def SM_SGD(self, r):
+        
+        self.reset_parameters()
+        self.beta = np.zeros((self.class_num, self.dim-1))
+        for i in range(0, self.T):
+            
+            if self.isprint_info == True:
+                self.print_info(self.T, i, self.beta, self.X_test, self.y_test)
+        
+            x = self.X_train[self.List[i], :]
+            y = self.y_train[self.List[i]]
+            
+            # 计算s_i
+            tmp = self.beta.dot(x.T)
+            e_tmp = np.exp(tmp)
+            
+            # 计算p_i
+            Se_tmp= sum(e_tmp)
+            prob = e_tmp / Se_tmp
+            
+            # 计算梯度
+            grad = np.matrix(prob) * x
+            grad[y] -= x
+            
+            # 更新 beta
+            delta = r * grad
+            self.beta -= delta
+            
+            # 计算 loss
+            self.l_[i] = - tmp[y] + np.log(Se_tmp)
+            rho = float(1)/(i+1)
+            if i == 0:
+                self.l_smo_[i] = self.l_[i]
+            else:
+                self.l_smo_[i] = (1 - rho) * self.l_smo_[i-1] + rho * self.l_[i]
+    
+        return self.l_, self.l_smo_, self.prec, self.loss
+        
+        
+    def SM_AdaGr(self, thres):
+        
+        self.reset_parameters()
+        self.beta = np.zeros((self.class_num, self.dim-1))
+        for i in range(0, self.T):
+            
+            if self.isprint_info == True:
+                self.print_info(self.T, i, self.beta, self.X_test, self.y_test)
+        
+            x = self.X_train[self.List[i], :]
+            y = self.y_train[self.List[i]]
+            
+            # 计算s_i
+            tmp = self.beta.dot(x.T)
+            e_tmp = np.exp(tmp)
+            
+            # 计算p_i
+            Se_tmp= sum(e_tmp)
+            prob = e_tmp / Se_tmp
+            
+            # 计算梯度
+            grad = np.matrix(prob) * x
+            grad[y] -= x
+            
+            # 计算步长
+            
+            b = np.exp(prob).A        
+    #        def f(r):
+    #            t = 0
+    #            for j in range(0, class_num):
+    #                t += e_tmp[j] / e_tmp[y] * b[j]**r
+    #            fr = (b[y] / np.exp(1))**r / t - thres #/(1-thres)
+    #            return fr[0,0]
+    #        r[i] = -fsolve(f, -0.1) / (x.dot(x.T))
+            
+            # 近似公式
+            self.r[i] = -(e_tmp[y] - thres * Se_tmp) / ((thres * ((e_tmp.T * b) - Se_tmp)) - e_tmp[y] * (1 - np.exp(1) / b[y])) / (x.dot(x.T))
+            lbd = float(1)/(i+1)
+            if i == 0:
+                self.r_smo[i] = self.r[i]
+            else:
+                self.r_smo[i] = lbd * self.r[i] + (1 - lbd) * self.r_smo[i-1]
+            
+            # 更新 beta
+            delta = self.r_smo[i] * grad
+            self.beta -= delta
+            
+            # 计算 loss
+            self.l_[i] = - tmp[y] + np.log(Se_tmp)
+            rho = lbd
+            if i == 0:
+                self.l_smo_[i] = self.l_[i]
+            else:
+                self.l_smo_[i] = (1 - rho) * self.l_smo_[i-1] + rho * self.l_[i]
+        
+        return self.l_, self.l_smo_, self.r, self.r_smo, self.prec, self.loss
+        
